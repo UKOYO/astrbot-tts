@@ -1,25 +1,2 @@
-# Python 缓存
 __pycache__/
-*.py[cod]
-*.egg-info/
-
-# 本地备份与草稿
-*.bak
-*.bak-*
-*.bak_*
-*.orig
-*.log
-tts_language_profiles_template.json
-
-# 运行期数据（不要随插件分发）
-plugin_data/
-session_languages.json
-data/
-
-# 虚拟环境与编辑器
-.venv/
-venv/
-.env
-.idea/
-.vscode/
-.DS_Store
+*.pyc

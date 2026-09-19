@@ -26,6 +26,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Plain, Record
 from astrbot.api.star import Context, Star, register
 
+from .avatar import DESCRIBE_PROMPT, AvatarStore, note_line
 from .sanitizer import strip_for_speech
 
 LOG_TAG = "[TTSStudio]"
@@ -238,7 +239,7 @@ def _session_store_path() -> Path:
     "astrbot_plugin_tts_studio",
     "唯笑 & keyou",
     "独立 TTS 语种自由：正文 → 朗读稿 → 语音",
-    "0.6.2",
+    "0.7.0",
 )
 class TtsStudio(Star):
     def __init__(self, context: Context, config: dict | None = None) -> None:
@@ -250,6 +251,8 @@ class TtsStudio(Star):
         self._locks: dict[str, asyncio.Lock] = {}
         self._voiced: dict[str, list[dict[str, Any]]] = {}
         self._session_langs: dict[str, str] = self._load_session_langs()
+        # 头像线索：拉回来的图和指纹落在 plugin_data 里，跟会话语种同一层
+        self._avatars = AvatarStore(_session_store_path().parent)
 
     # ---------------------------------------------------------------- 配置
 
@@ -775,16 +778,110 @@ class TtsStudio(Star):
     async def on_llm_request(
         self, event: AstrMessageEvent, req: Any
     ) -> None:
-        """下一轮开口前，把上一条语音的事补进系统提示词。"""
-        if not bool(self._cfg("voice_log_notice", True)):
-            return
+        """下一轮开口前，把上一条语音和头像的近况补进系统提示词。"""
         session = self._session_id(event)
         if not session:
             return
-        note = self._drain_voice_note(session)
-        if note:
-            req.system_prompt = (getattr(req, "system_prompt", "") or "") + "\n\n" + note
-            logger.debug("%s 已注入语音投递回执", LOG_TAG)
+
+        blocks: list[str] = []
+        if bool(self._cfg("voice_log_notice", True)):
+            note = self._drain_voice_note(session)
+            if note:
+                blocks.append(note)
+
+        try:
+            clue = await self._avatar_clue(event)
+        except Exception as exc:  # 头像这条线永远不许拖累正常对话
+            logger.warning("%s 头像线索失败: %s", LOG_TAG, exc)
+            clue = ""
+        if clue:
+            blocks.append(clue)
+
+        if blocks:
+            req.system_prompt = (
+                (getattr(req, "system_prompt", "") or "") + "\n\n" + "\n\n".join(blocks)
+            )
+            logger.debug("%s 已注入 %d 段补充上下文", LOG_TAG, len(blocks))
+
+    # ------------------------------------------------------------ 头像线索
+
+    @staticmethod
+    def _self_id(event: AstrMessageEvent) -> str:
+        fn = getattr(event, "get_self_id", None)
+        if callable(fn):
+            try:
+                value = fn()
+                if value:
+                    return str(value)
+            except Exception:
+                pass
+        obj = getattr(event, "message_obj", None)
+        return str(getattr(obj, "self_id", "") or "")
+
+    def _avatar_on(self, event: AstrMessageEvent) -> bool:
+        """头像线索默认只在私聊开：群里人多，一个个拉头像又慢又吵。"""
+        if not bool(self._cfg("avatar_clue", True)):
+            return False
+        scope = str(self._cfg("avatar_scope", "private") or "private").strip().lower()
+        if scope in {"off", "none", "关闭", "关"}:
+            return False
+        if scope in {"all", "group", "全部"}:
+            return True
+        if scope in {"primary", "主用户", "owner"}:
+            return str(event.get_sender_id()) in self._primary_users()
+        return self._is_private(event)
+
+    async def _describe_avatar(
+        self, event: AstrMessageEvent, qq: str, snap: dict[str, Any]
+    ) -> str:
+        """让视觉那条链路看一眼这张脸，换成一句话存下来。"""
+        provider = self._conversion_provider(event)
+        if provider is None:
+            return ""
+        url = str(self._avatars.get(qq).get("url") or "")
+        for target in [t for t in (url, snap.get("path")) if t]:
+            try:
+                resp = await provider.text_chat(
+                    prompt=DESCRIBE_PROMPT, image_urls=[str(target)]
+                )
+            except Exception as exc:
+                logger.info("%s 头像转述这一路没通(%s)，换下一个地址", LOG_TAG, exc)
+                continue
+            text = (getattr(resp, "completion_text", "") or "").strip()
+            if text:
+                return text[:200]
+        return ""
+
+    async def _avatar_clue(self, event: AstrMessageEvent) -> str:
+        """给相关的人各看一次头像：第一次见、或者他换了脸。"""
+        if not self._avatar_on(event):
+            return ""
+
+        sender = str(event.get_sender_id() or "").strip()
+        me = self._self_id(event).strip()
+        targets: list[tuple[str, str]] = []
+        if sender:
+            targets.append((sender, "对方"))
+        if me and me != sender:
+            targets.append((me, "你自己"))
+
+        lines_out: list[str] = []
+        for qq, who in targets:
+            # 拉图是同步网络请求，扔到线程里，别卡住事件循环
+            snap = await asyncio.to_thread(self._avatars.snapshot, qq)
+            if snap.get("error"):
+                logger.debug("%s 头像没拉到 %s: %s", LOG_TAG, qq, snap["error"])
+                continue
+            if not snap.get("desc") and (snap.get("first_seen") or snap.get("changed")):
+                desc = await self._describe_avatar(event, qq, snap)
+                if desc:
+                    self._avatars.set_description(qq, desc)
+                    snap["desc"] = desc
+            line = note_line(snap, who)
+            if line:
+                lines_out.append(line)
+
+        return "\n".join(lines_out)
 
     # ---------------------------------------------------------------- 指令
 

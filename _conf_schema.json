@@ -191,5 +191,29 @@
     "description": "语音投递回执",
     "default": true,
     "hint": "语音补发后留一条短记录，下一轮注入系统提示词，让模型知道「自己刚才确实出过声」。注入一次即清，默认最多 3 条、15 分钟内有效。"
+  },
+  "avatar_clue": {
+    "type": "bool",
+    "description": "头像线索",
+    "default": true,
+    "hint": "按 QQ 号拉公开头像直链，缓存到 plugin_data 并算感知指纹。第一次见或对方换头像时，让视觉模型看一眼写成一句话注入提示词；指纹没变就什么都不做，不重复花钱。"
+  },
+  "avatar_scope": {
+    "type": "string",
+    "description": "头像线索范围",
+    "options": [
+      "private",
+      "primary",
+      "all",
+      "off"
+    ],
+    "labels": [
+      "只私聊",
+      "只主用户",
+      "所有会话",
+      "关闭"
+    ],
+    "default": "private",
+    "hint": "默认只私聊。群里人一多，每个新面孔都会触发一次看图，慢且费钱，想开再开。"
   }
 }
