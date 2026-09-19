@@ -1,0 +1,195 @@
+{
+  "enable": {
+    "type": "bool",
+    "description": "总开关",
+    "default": true,
+    "hint": "关掉后本插件完全不介入消息发送。"
+  },
+  "trigger_scope": {
+    "type": "string",
+    "description": "触发范围",
+    "options": [
+      "primary_private",
+      "private_only",
+      "all"
+    ],
+    "labels": [
+      "仅主用户的私聊",
+      "所有私聊",
+      "所有会话"
+    ],
+    "default": "primary_private",
+    "hint": "默认只给主用户本人的私聊合成语音。"
+  },
+  "primary_user_ids": {
+    "type": "text",
+    "description": "主用户 ID",
+    "default": "",
+    "hint": "一行一个，也可用逗号分隔。OneBot 通常填 QQ 号。"
+  },
+  "voice_language": {
+    "type": "string",
+    "description": "语音语种",
+    "options": [
+      "ja",
+      "ja_kansai",
+      "zh",
+      "yue",
+      "ko",
+      "de",
+      "fr",
+      "es",
+      "it",
+      "pt",
+      "ru",
+      "ar",
+      "en",
+      "aave_wc"
+    ],
+    "labels": [
+      "标准日语（东京腔）",
+      "关西腔日语",
+      "中文",
+      "粤语",
+      "韩语",
+      "德语",
+      "法语",
+      "西班牙语",
+      "意大利语",
+      "葡萄牙语",
+      "俄语",
+      "阿拉伯语",
+      "英语",
+      "美国俚语黑人西海岸口音"
+    ],
+    "default": "ja"
+  },
+  "conversion_provider_id": {
+    "type": "string",
+    "description": "文本转换模型",
+    "default": "",
+    "hint": "把正文改写成朗读稿用的对话模型，留空则跟随当前会话的模型。"
+  },
+  "tts_provider_id": {
+    "type": "string",
+    "description": "TTS 供应商",
+    "default": "",
+    "hint": "留空则跟随当前会话配置的语音供应商。"
+  },
+  "send_mode": {
+    "type": "string",
+    "description": "语音发送方式",
+    "options": [
+      "followup",
+      "attach"
+    ],
+    "labels": [
+      "后台追发（文字不等语音）",
+      "随消息挂载"
+    ],
+    "default": "followup",
+    "hint": "后台追发：文字立刻发出，语音转写合成完再单独补一条，最快也最不卡。"
+  },
+  "kana_guard": {
+    "type": "bool",
+    "description": "日语护栏",
+    "default": true,
+    "hint": "转写结果假名太少（说明还是中文原文）时跳过语音，避免声码器念中文破音。"
+  },
+  "extra_conversion_prompt": {
+    "type": "text",
+    "description": "转换补充规则",
+    "default": "",
+    "hint": "拼在转换提示词后面的额外要求，例如标点密度、气声写法、口癖约定。"
+  },
+  "language_profiles": {
+    "type": "text",
+    "description": "语种专属通道",
+    "default": "",
+    "hint": "JSON。想给某个语种加专属提示词／声学取向就写在这里，例如 {\"aave_wc\": {\"pitch\": 0.94, \"tempo\": 0.96, \"eq\": \"equalizer=f=180:t=h:width_type=o:width=1.2:g=4.5\", \"guard\": \"latin\", \"aliases\": [\"黑帮\"], \"prompt\": \"把{char}的话改写…\"}}。只写要覆盖的字段；guard 可选 kana／cjk／hangul／latin／cyrillic／arabic／none。"
+  },
+  "persona_bot_name": {
+    "type": "string",
+    "description": "角色名（占位 {char}）",
+    "default": "",
+    "hint": "语种规则里的 {char} 会换成这个名字；留空则显示为「角色」。"
+  },
+  "persona_user_name": {
+    "type": "string",
+    "description": "对方称呼（占位 {user}）",
+    "default": "",
+    "hint": "语种规则里的 {user} 会换成这个名字；留空则显示为「对方」。"
+  },
+  "intensity_pitch": {
+    "type": "bool",
+    "description": "激烈度抬音",
+    "default": true,
+    "hint": "按拟声词密度自动抬音高（日常不动／私密 ×1.08／高峰 ×1.12）。不需要就关掉。"
+  },
+  "pitch_private": {
+    "type": "float",
+    "description": "私密段音高倍率",
+    "default": 1.08
+  },
+  "pitch_peak": {
+    "type": "float",
+    "description": "逼近高潮音高倍率",
+    "default": 1.12
+  },
+  "intensity_markers": {
+    "type": "text",
+    "description": "激烈度关键词",
+    "default": "",
+    "hint": "空格或逗号分隔的拟声／求饶词，用来自动判断激烈度；留空用内置的中文表。"
+  },
+  "min_chars": {
+    "type": "int",
+    "description": "最短合成字数",
+    "default": 1
+  },
+  "max_chars": {
+    "type": "int",
+    "description": "朗读稿最长字数",
+    "default": 400,
+    "hint": "超过的正文会被截断后再合成，越长越慢，建议 300~400。"
+  },
+  "hard_max_chars": {
+    "type": "int",
+    "description": "不合成门限",
+    "default": 800,
+    "hint": "正文长过这个数就整条不出语音，免得合成等太久。"
+  },
+  "min_interval_seconds": {
+    "type": "float",
+    "description": "同一会话最小间隔（秒）",
+    "default": 2.0
+  },
+  "strip_parenthetical": {
+    "type": "bool",
+    "description": "剔除括号舞台指示",
+    "default": true
+  },
+  "strip_emoji": {
+    "type": "bool",
+    "description": "剔除颜文字与 emoji",
+    "default": true,
+    "hint": "颜文字与表情符号最容易让声码器出破音。"
+  },
+  "keep_visible_text": {
+    "type": "bool",
+    "description": "保留文字一起发出",
+    "default": true,
+    "hint": "仅「随消息挂载」模式下生效；后台追发模式下文字总是先发。"
+  },
+  "skip_when_contains_media": {
+    "type": "bool",
+    "description": "含图片／语音时不重复合成",
+    "default": true
+  },
+  "voice_log_notice": {
+    "type": "bool",
+    "description": "语音投递回执",
+    "default": true,
+    "hint": "语音补发后留一条短记录，下一轮注入系统提示词，让模型知道「自己刚才确实出过声」。注入一次即清，默认最多 3 条、15 分钟内有效。"
+  }
+}

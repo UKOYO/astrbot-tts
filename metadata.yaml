@@ -1,0 +1,28 @@
+name: astrbot_plugin_tts_studio
+display_name: TTS 语种自由
+short_desc: 正文照常发中文，后台把朗读稿转成目标语种，语音单独补发，语种还能按会话分开设。
+desc: 独立于陪伴插件的tts：文字照常发中文正文，后台把正文转写成目标语种朗读稿再合成语音单独补发，两边互不等待，并留下投递回执。
+version: 0.6.2
+author: 唯笑 & keyou
+repo: https://github.com/UKOYO/astrbot-tts
+category: AI 增强
+tags:
+  - 语音
+  - TTS
+  - 独立插件
+help: |
+  私聊 / 群聊发送：
+  - tts 状态
+  - tts 关闭 / tts 开启
+  - tts 语种日语（= 标准日语/东京腔；关西腔是独立语种，要明说「关西腔」；只改当前会话）
+  - tts 语种默认（当前会话回到面板的全局语种）
+  支持：中文、粤语、韩语、德语、法语、西班牙语、意大利语、葡萄牙语、俄语、阿拉伯语、英语
+  - tts 试读（一段文字）
+
+  设计取向：陪伴插件保持不动，本插件只做「正文 → 朗读稿 → 语音」这一段。
+  默认只对配置里的主用户生效，其他人一律不合成。
+  注意：必须关掉陪伴插件的「TTS 强化」，两套同时开会各发一条语音。
+support_platforms:
+  - aiocqhttp
+  - qq_official
+astrbot_version: ">=4.22.0"
