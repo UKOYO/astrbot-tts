@@ -2,7 +2,7 @@ name: astrbot_plugin_tts_studio
 display_name: TTS 语种自由
 short_desc: 正文照常发中文，后台把朗读稿转成目标语种，语音单独补发，语种还能按会话分开设。
 desc: 独立于陪伴插件的tts：文字照常发中文正文，后台把正文转写成目标语种朗读稿再合成语音单独补发，两边互不等待，并留下投递回执。
-version: 0.7.0
+version: 0.8.0
 author: 唯笑 & keyou
 repo: https://github.com/UKOYO/astrbot-tts
 category: AI 增强

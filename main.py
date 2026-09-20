@@ -407,9 +407,54 @@ class TtsStudio(Star):
             event.message_obj, "group_id", None
         )
 
+    @staticmethod
+    def _is_llm_result(event: AstrMessageEvent) -> bool:
+        """判断这条待发内容是不是 LLM 生成的。
+
+        插件指令的回复（/picadl、/picasearch 之类）走的是同一条发送管线，
+        但 result_content_type 是 GENERAL_RESULT，不是 LLM_RESULT。
+        这类内容不该被念出来。
+        """
+        try:
+            result = event.get_result()
+        except Exception:
+            return True
+        if result is None:
+            return True
+        checker = getattr(result, "is_llm_result", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                return True
+        # 老版本框架没有 result_content_type 字段，退化为不拦截
+        return True
+
+    def _skip_patterns(self) -> list[re.Pattern[str]]:
+        raw = str(self._cfg("skip_patterns", "") or "")
+        pats: list[re.Pattern[str]] = []
+        for line in re.split(r"[\n,，;；]+", raw):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                pats.append(re.compile(line))
+            except re.error:
+                logger.warning("%s 跳过规则不是合法正则，已忽略: %s", LOG_TAG, line)
+        return pats
+
+    def _matches_skip_pattern(self, text: str) -> bool:
+        return any(pat.search(text) for pat in self._skip_patterns())
+
     def _should_trigger(self, event: AstrMessageEvent, text: str) -> tuple[bool, str]:
         if not self._enabled():
             return False, "disabled"
+
+        # 只念人格对话本身，插件指令的回复不念
+        if bool(self._cfg("only_llm_result", True)) and not self._is_llm_result(event):
+            return False, "not_llm_result"
+        if self._matches_skip_pattern(text):
+            return False, "skip_pattern"
 
         scope = str(self._cfg("trigger_scope", "primary_private") or "")
         private = self._is_private(event)
@@ -526,10 +571,16 @@ class TtsStudio(Star):
     async def _synthesize_with(
         self, provider: Any, spoken: str, session: str | None = None
     ) -> str | None:
+        # 供应商代理：留空就不动 provider 自己的配置。
+        # 之前这里写死了本机的 127.0.0.1:7890，别人装上去只会多绕一圈。
+        proxy_url = str(self._cfg("provider_proxy", "") or "").strip()
+        if proxy_url and hasattr(provider, "proxy"):
+            provider.proxy = proxy_url
         try:
             audio_path = await provider.get_audio(spoken)
         except Exception as exc:
             logger.warning("%s 语音合成失败: %s", LOG_TAG, exc)
+            logger.debug("%s 合成异常堆栈", LOG_TAG, exc_info=True)
             return None
         if not audio_path:
             return None
@@ -872,11 +923,14 @@ class TtsStudio(Star):
             if snap.get("error"):
                 logger.debug("%s 头像没拉到 %s: %s", LOG_TAG, qq, snap["error"])
                 continue
-            if not snap.get("desc") and (snap.get("first_seen") or snap.get("changed")):
+            if snap.get("needs_desc"):
                 desc = await self._describe_avatar(event, qq, snap)
                 if desc:
                     self._avatars.set_description(qq, desc)
                     snap["desc"] = desc
+                else:
+                    tries = self._avatars.mark_desc_attempt(qq)
+                    logger.debug("%s 头像描述第 %s 次没成 %s", LOG_TAG, tries, qq)
             line = note_line(snap, who)
             if line:
                 lines_out.append(line)

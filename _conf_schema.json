@@ -5,6 +5,24 @@
     "default": true,
     "hint": "关掉后本插件完全不介入消息发送。"
   },
+  "only_llm_result": {
+    "type": "bool",
+    "description": "只朗读 LLM 的回复",
+    "hint": "开启后，插件指令的回复（/picadl 的提示、/picasearch 的卡片附言等）不会被念成语音，只有人格对话本身会被朗读",
+    "default": true
+  },
+  "skip_patterns": {
+    "type": "string",
+    "description": "跳过朗读的文本规则(正则)",
+    "hint": "每行一条正则，命中就不合成语音。留空不做文本过滤。例: ^📚 开始整本下载",
+    "default": ""
+  },
+  "provider_proxy": {
+    "type": "string",
+    "description": "供应商代理",
+    "default": "",
+    "hint": "留空表示不改动供应商自身配置。填 http://127.0.0.1:7890 这类地址则强制让本插件的合成请求走该代理。"
+  },
   "trigger_scope": {
     "type": "string",
     "description": "触发范围",

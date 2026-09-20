@@ -28,6 +28,8 @@ REFRESH_SECONDS = 900
 # 两张指纹差多少个 bit 以内算同一张头像。
 # 头像被 CDN 重新压一次可能动一两个 bit，严丝合缝地比对会天天误报「换头像」。
 MAX_DRIFT = 6
+# 描述没成功时的补考次数。网络抖一下不该让一张脸永远没描述。
+MAX_DESC_TRIES = 3
 
 # 两条直链都是公开的，第一条不通就退第二条。
 AVATAR_URLS = (
@@ -35,7 +37,7 @@ AVATAR_URLS = (
     "https://q.qlogo.cn/headimg_dl?dst_uin={qq}&spec={size}&img_type=jpg",
 )
 
-UA = "Mozilla/5.0 (compatible; AstrBot-TTSStudio/0.7)"
+UA = "Mozilla/5.0 (compatible; AstrBot-TTSStudio/0.8)"
 
 # 交给视觉模型时的提示词：只要外观，不做身份判断。
 DESCRIBE_PROMPT = (
@@ -131,6 +133,20 @@ class AvatarStore:
     def image_path(self, qq: str | int) -> Path:
         return self.base / f"{str(qq).strip()}.jpg"
 
+    @staticmethod
+    def _needs_desc(entry: dict[str, Any], first_seen: bool, changed: bool) -> bool:
+        """这张脸还欠一次描述吗。
+
+        第一次见、换了头像，或者上次描述没成、补考次数还没用完，都算欠。
+        之前只有「第一次见 / 换了头像」会触发描述，网络抖一下这张脸就永远没描述了，
+        MAX_DESC_TRIES 就是给这种时候留的后路。
+        """
+        if entry.get("desc"):
+            return False
+        if first_seen or changed:
+            return True
+        return int(entry.get("desc_tries") or 0) < MAX_DESC_TRIES
+
     # ------------------------------------------------------------ 核心快照
 
     def snapshot(
@@ -164,6 +180,7 @@ class AvatarStore:
                 "first_seen": False,
                 "fresh": False,
                 "desc": entry.get("desc") or "",
+                "needs_desc": self._needs_desc(entry, False, False),
                 "at": entry.get("at"),
                 "error": "",
             }
@@ -179,6 +196,7 @@ class AvatarStore:
                 "first_seen": False,
                 "fresh": False,
                 "desc": entry.get("desc") or "",
+                "needs_desc": False,
                 "at": entry.get("at"),
                 "error": str(exc),
             }
@@ -216,6 +234,7 @@ class AvatarStore:
             "first_seen": first_seen,
             "fresh": True,
             "desc": entry.get("desc") or "",
+            "needs_desc": self._needs_desc(entry, first_seen, changed),
             "at": now,
             "bytes": len(data),
             "drift": drift,
@@ -230,8 +249,19 @@ class AvatarStore:
         entry = dict(index.get(qq) or {})
         entry["desc"] = (desc or "").strip()[:400]
         entry["desc_at"] = time.time()
+        entry.pop("desc_tries", None)
         index[qq] = entry
         self._save_index(index)
+
+    def mark_desc_attempt(self, qq: str | int) -> int:
+        """记一次描述失败，返回累计失败次数。"""
+        qq = str(qq).strip()
+        index = self._load_index()
+        entry = dict(index.get(qq) or {})
+        entry["desc_tries"] = int(entry.get("desc_tries") or 0) + 1
+        index[qq] = entry
+        self._save_index(index)
+        return entry["desc_tries"]
 
     def get(self, qq: str | int) -> dict[str, Any]:
         return dict(self._load_index().get(str(qq).strip()) or {})
