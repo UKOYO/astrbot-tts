@@ -14,8 +14,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -23,13 +25,40 @@ from typing import Any
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
-from astrbot.api.message_components import Plain, Record
+from astrbot.api.message_components import Image, Plain, Record
 from astrbot.api.star import Context, Star, register
+from astrbot.core.provider.entities import ProviderType
+from astrbot.core.star.filter.custom_filter import CustomFilter
+
+from .help_card import render_help_card
 
 from .avatar import DESCRIBE_PROMPT, AvatarStore, note_line
 from .sanitizer import strip_for_speech
 
 LOG_TAG = "[TTSStudio]"
+
+
+class CompactTTSCommandFilter(CustomFilter):
+    """Accept compact commands without duplicating the standard command routes."""
+
+    def filter(self, event: AstrMessageEvent, cfg) -> bool:
+        if not event.is_at_or_wake_command:
+            return False
+        text = event.get_message_str().strip()
+        if re.match(r"^tts(?:\s|$)", text) or re.match(r"^tts帮助(?:\s|$)", text):
+            return False
+        match = re.match(r"(?i)^tts[\s:：,，]*(.*)$", text)
+        if not match:
+            return False
+        arg = match.group(1).strip()
+        if arg.startswith(("音色", "语种")):
+            return True
+        commands = {
+            "", "状态", "帮助", "help", "h", "开启", "关闭",
+            "列表", "列表？", "清单", "全部", "所有", "list", "ls",
+            "默认", "全局", "跟随全局", "恢复默认", "清除",
+        }
+        return arg in commands or arg in LANGUAGE_ALIASES or arg in LANGUAGE_LABELS or arg in LANGUAGE_LABELS.values()
 
 # 音高后处理的默认值，都能在配置面板里改：
 # fish.audio 只给速度不给音高，升调只能在这边本地做。
@@ -235,6 +264,16 @@ def _session_store_path() -> Path:
     return base / "session_languages.json"
 
 
+def _session_voice_store_path() -> Path:
+    """会话音色和会话语种放同一层，单独一个文件。"""
+    return _session_store_path().with_name("session_voices.json")
+
+
+def _voice_preview_dir() -> Path:
+    """音色试听缓存目录，跟会话配置放在同一个 plugin_data 目录。"""
+    return _session_store_path().parent / "voice_previews"
+
+
 @register(
     "astrbot_plugin_tts_studio",
     "唯笑 & keyou",
@@ -251,6 +290,7 @@ class TtsStudio(Star):
         self._locks: dict[str, asyncio.Lock] = {}
         self._voiced: dict[str, list[dict[str, Any]]] = {}
         self._session_langs: dict[str, str] = self._load_session_langs()
+        self._session_voices: dict[str, str] = self._load_session_voices()
         # 头像线索：拉回来的图和指纹落在 plugin_data 里，跟会话语种同一层
         self._avatars = AvatarStore(_session_store_path().parent)
 
@@ -387,6 +427,128 @@ class TtsStudio(Star):
         self._session_langs.pop(str(session), None)
         self._save_session_langs()
         return True
+
+    # ------------------------------------------------------------- 会话音色
+
+    def _load_session_voices(self) -> dict[str, str]:
+        """读出会话音色覆盖。文件坏了就当没设过，不影响开插件。"""
+        path = _session_voice_store_path()
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("%s 会话音色读不出来，按没设过处理: %s", LOG_TAG, exc)
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): str(v) for k, v in data.items() if str(v).strip()}
+
+    def _save_session_voices(self) -> None:
+        path = _session_voice_store_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(
+                json.dumps(self._session_voices, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except Exception as exc:
+            logger.warning("%s 会话音色没存下去: %s", LOG_TAG, exc)
+
+    def _session_voice(self, session: str | None) -> str | None:
+        """这个会话单独设过的音色 id；没设过返回 None。"""
+        if not session:
+            return None
+        picked = self._session_voices.get(str(session))
+        return picked if picked else None
+
+    def _set_session_voice(self, session: str | None, voice_id: str) -> None:
+        if not session:
+            logger.warning("%s 这个会话认不出标识，音色没法单独存", LOG_TAG)
+            return
+        self._session_voices[str(session)] = voice_id
+        self._save_session_voices()
+
+    def _clear_session_voice(self, session: str | None) -> bool:
+        if not session or str(session) not in self._session_voices:
+            return False
+        self._session_voices.pop(str(session), None)
+        self._save_session_voices()
+        return True
+
+    def _get_all_tts_providers(self) -> list[Any]:
+        try:
+            provs = self.context.get_all_tts_providers()
+            if provs:
+                return list(provs)
+        except Exception as exc:
+            logger.warning("%s 获取 TTS 供应商列表失败: %s", LOG_TAG, exc)
+        return []
+
+    @staticmethod
+    def _provider_id(provider: Any) -> str:
+        config = getattr(provider, "provider_config", {}) or {}
+        meta = provider.meta() if hasattr(provider, "meta") else None
+        return str(config.get("id") or getattr(meta, "id", "") or "").strip()
+
+    def _voice_preview_text(self, session: str | None) -> str:
+        return str(
+            self._cfg("voice_preview_text", "你好，这里是当前音色的试听")
+            or "你好，这里是当前音色的试听"
+        ).strip()
+
+    async def _voice_preview(self, provider: Any, session: str | None) -> str | None:
+        """合成并缓存当前供应商的试听语音，命中缓存时不再请求供应商。"""
+        spoken = self._voice_preview_text(session)
+        lang = self._language(session)
+        provider_id = self._provider_id(provider) or repr(provider)
+        cache_key = json.dumps({
+            "provider": provider_id,
+            "language": lang,
+            "text": spoken,
+            "intensity_pitch": bool(self._cfg("intensity_pitch", True)),
+            "pitch_private": self._pitch_private(),
+            "pitch_peak": self._pitch_peak(),
+            "profile": self._lang_profile(lang),
+        }, ensure_ascii=False, sort_keys=True, default=str)
+        digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:24]
+        cache_dir = _voice_preview_dir()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cached = next(
+            (path for path in cache_dir.glob(f"{digest}.*")
+             if path.is_file() and path.stat().st_size > 0),
+            None,
+        )
+        if cached is not None:
+            return str(cached)
+
+        audio = await self._synthesize_with(provider, spoken, session)
+        if not audio:
+            return None
+        source = Path(audio)
+        if not source.exists():
+            return None
+        cached = cache_dir / f"{digest}{source.suffix or '.audio'}"
+        try:
+            shutil.copyfile(source, cached)
+            return str(cached)
+        except Exception as exc:
+            logger.warning("%s 音色试听缓存失败: %s", LOG_TAG, exc)
+            return audio
+
+    async def _send_voice_preview(self, event: AstrMessageEvent) -> None:
+        session = self._session_id(event)
+        provider = self._tts_provider(event)
+        if provider is None:
+            return
+        audio = await self._voice_preview(provider, session)
+        if audio:
+            await self.context.send_message(
+                session,
+                MessageChain([Record(file=audio, url=audio)]),
+            )
 
     def _primary_users(self) -> set[str]:
         raw = self._cfg("primary_user_ids", "") or ""
@@ -635,6 +797,23 @@ class TtsStudio(Star):
         return _render_audio(path, ratio, tempo, eq, tag)
 
     def _tts_provider(self, event: AstrMessageEvent) -> Any | None:
+        session = self._session_id(event)
+        session_voice = self._session_voice(session)
+        if session_voice:
+            for p in self._get_all_tts_providers():
+                try:
+                    pid = getattr(p, "provider_config", {}).get("id") or (
+                        p.meta().id if hasattr(p, "meta") else None
+                    )
+                    if pid and str(pid).strip().lower() == session_voice.strip().lower():
+                        return p
+                except Exception:
+                    pass
+            prov = self.context.get_provider_by_id(session_voice)
+            if prov is not None:
+                return prov
+            logger.warning("%s 会话指定 TTS 供应商不存在: %s", LOG_TAG, session_voice)
+
         provider_id = str(self._cfg("tts_provider_id", "") or "").strip()
         if provider_id:
             provider = self.context.get_provider_by_id(provider_id)
@@ -642,7 +821,7 @@ class TtsStudio(Star):
                 return provider
             logger.warning("%s 指定 TTS 供应商不存在: %s", LOG_TAG, provider_id)
         try:
-            return self.context.get_using_tts_provider(umo=self._session_id(event))
+            return self.context.get_using_tts_provider(umo=session)
         except TypeError:
             return self.context.get_using_tts_provider()
 
@@ -939,13 +1118,104 @@ class TtsStudio(Star):
 
     # ---------------------------------------------------------------- 指令
 
+    @filter.command("tts帮助")
+    async def tts_help_cmd(self, event: AstrMessageEvent):
+        """渲染并返回瑞士风格 TTS 双列帮助卡片（左音色右语种）。"""
+        session = self._session_id(event)
+        labels = self._language_labels()
+        aliases = self._language_aliases()
+        custom = self._lang_profiles()
+        current_lang_code = self._language(session)
+        current_lang_name = labels.get(current_lang_code, current_lang_code)
+
+        # 整理语种列表
+        spoken: dict[str, str] = {}
+        for alias, code in aliases.items():
+            if code not in labels:
+                continue
+            if code not in spoken or len(alias) < len(spoken[code]):
+                spoken[code] = alias
+        for code, label in labels.items():
+            spoken.setdefault(code, label)
+
+        languages_data: list[dict[str, str]] = []
+        for code in sorted(labels, key=lambda c: (c not in ("ja", "ja_kansai", "zh"), c)):
+            short_name = spoken.get(code, labels[code])
+            full_name = labels[code]
+            kind = "自定义" if code in custom else "内置"
+            languages_data.append({
+                "alias": short_name,
+                "name": full_name,
+                "cmd": f"tts 语种{short_name}",
+                "type": kind,
+            })
+
+        # 音色列表实时读取当前可用的 TTS 供应商，避免与后台配置脱节
+        providers = self._get_all_tts_providers()
+        voices_data: list[dict[str, str]] = []
+        for provider in providers:
+            try:
+                config = getattr(provider, "provider_config", {}) or {}
+                meta = provider.meta() if hasattr(provider, "meta") else None
+                provider_id = str(config.get("id") or getattr(meta, "id", "") or "").strip()
+                provider_name = str(
+                    config.get("name")
+                    or getattr(meta, "name", "")
+                    or provider_id
+                ).strip()
+                if not provider_id and not provider_name:
+                    continue
+                display_name = provider_name or provider_id
+                command_name = provider_id or display_name
+                description = str(
+                    config.get("description")
+                    or getattr(meta, "description", "")
+                    or "当前可用 TTS 供应商"
+                ).strip()
+                voices_data.append({
+                    "name": display_name,
+                    "desc": description,
+                    "cmd": f"tts 音色{command_name}",
+                    "tag": "默认" if provider_id == str(self._cfg("tts_provider_id", "") or "").strip() else "可用",
+                })
+            except Exception as exc:
+                logger.debug("%s 跳过无法读取的 TTS 供应商: %s", LOG_TAG, exc)
+
+        voices_data.append({
+            "name": "全局默认",
+            "desc": "恢复面板配置",
+            "cmd": "tts 音色默认",
+            "tag": "重置",
+        })
+        current_voice = self._session_voices.get(session, "跟随全局")
+
+        # 渲染卡片
+        img_bytes = render_help_card(
+            current_lang=current_lang_name,
+            current_voice=current_voice,
+            languages=languages_data,
+            voices=voices_data,
+        )
+
+        yield event.chain_result([Image.fromBytes(img_bytes)])
+
+    @filter.custom_filter(CompactTTSCommandFilter)
+    async def tts_compact_cmd(self, event: AstrMessageEvent):
+        async for result in self.tts_studio_cmd(event):
+            yield result
+
     @filter.command("tts")
     async def tts_studio_cmd(self, event: AstrMessageEvent):
         text = (event.message_str or "").strip()
         arg = re.sub(r"(?i)^\s*tts[\s:：,，]*", "", text, count=1).strip()
         session = self._session_id(event)
 
-        if not arg or arg == "状态":
+        if not arg or arg in {"状态", "帮助", "help", "h"}:
+            # 若输入 tts 帮助，直接分发到 tts_help_cmd 的逻辑
+            if arg in {"帮助", "help", "h"}:
+                async for res in self.tts_help_cmd(event):
+                    yield res
+                return
             yield event.plain_result(self._status_text(session))
             return
 
@@ -960,6 +1230,13 @@ class TtsStudio(Star):
             return
 
         target = arg.removeprefix("语种").strip()
+
+        # 语种列表请求时，统一走卡片帮助渲染
+        if target in {"列表", "列表？", "清单", "全部", "所有", "list", "ls"}:
+            async for res in self.tts_help_cmd(event):
+                yield res
+            return
+
         labels = self._language_labels()
         if target in {"默认", "全局", "跟随全局", "恢复默认", "清除"}:
             self._clear_session_language(session)
@@ -975,22 +1252,57 @@ class TtsStudio(Star):
             yield event.plain_result(f"tts：本会话改说{labels[code]}了（只在这里生效）")
             return
 
-        if arg.startswith("试读"):
-            sample = arg.replace("试读", "", 1).strip()
-            if not sample:
-                yield event.plain_result("试读后面要跟一段文字哦。")
+        # 新增音色切换逻辑（与语种切换一致）
+        if arg.startswith("音色"):
+            target = arg.removeprefix("音色").strip()
+            if target in {"列表", "列表？", "清单", "全部", "所有", "list", "ls"}:
+                async for res in self.tts_help_cmd(event):
+                    yield res
                 return
-            spoken = await self._convert(sample, event)
-            audio = await self._synthesize(spoken, event)
-            if audio:
-                yield event.chain_result([Record(file=audio, url=audio, text=sample)])
-            else:
-                yield event.plain_result("这次没合成出来，去日志里看看。")
-            return
+            if target in {"默认", "全局", "跟随全局", "恢复默认", "清除"}:
+                self._clear_session_voice(session)
+                yield event.plain_result("tts：音色回到全局了（只在这里生效）")
+                await self._send_voice_preview(event)
+                return
 
-        yield event.plain_result(
-            "用法：tts 状态／开启／关闭／语种日语（只改本会话）／语种默认（回到全局）／试读（文字）"
-        )
+            voice = target.strip()
+            if voice:
+                self._set_session_voice(session, voice)
+                yield event.plain_result(f"tts：本会话改用音色{voice}了（只在这里生效）")
+                await self._send_voice_preview(event)
+                return
+
+    def _language_list_text(self, session: str | None = None) -> str:
+        """列全部可选语种：每行一个，带上能直接说出口的切换指令。"""
+        labels = self._language_labels()
+        aliases = self._language_aliases()
+        custom = self._lang_profiles()
+        current = self._language(session)
+        own = self._session_language(session) if session else None
+
+        # 每个语种挑一个最短的口语叫法，内置没别名就用标签本身
+        spoken: dict[str, str] = {}
+        for alias, code in aliases.items():
+            if code not in labels:
+                continue
+            if code not in spoken or len(alias) < len(spoken[code]):
+                spoken[code] = alias
+        for code, label in labels.items():
+            spoken.setdefault(code, label)
+
+        rows: list[str] = []
+        for code in sorted(labels, key=lambda c: (c not in ("ja", "ja_kansai", "zh"), c)):
+            tag = " <- 本会话" if code == current else ""
+            kind = "自定义" if code in custom else "内置"
+            rows.append(
+                f"{spoken.get(code, labels[code])}｜{labels[code]}"
+                f"｜tts 语种{spoken.get(code, labels[code])}｜{kind}{tag}"
+            )
+
+        scope = "，单独设过" if own else "，跟全局"
+        head = f"TTS 语种列表（共 {len(labels)} 种，本会话语种：{labels[current]}{scope}）"
+        tail = "用法：tts 语种日语 / tts 语种默认（回全局）"
+        return "\n".join([head, *rows, tail])
 
     def _status_text(self, session: str | None = None) -> str:
         labels = self._language_labels()
