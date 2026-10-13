@@ -74,7 +74,7 @@ DEFAULT_INTENSITY_MARKERS: tuple[str, ...] = ()
 INTENSITY_LEVELS = 4
 
 
-def _render_audio(path: str, ratio: float, tempo: float, eq: str, tag: str) -> str:
+async def _render_audio(path: str, ratio: float, tempo: float, eq: str, tag: str) -> str:
     """按倍率／语速／低架做一次后处理；任何一步出问题都原样返回，绝不拖垮发语音。"""
     if abs(ratio - 1.0) < 1e-3 and abs(tempo - 1.0) < 1e-3 and not eq:
         return path
@@ -90,7 +90,7 @@ def _render_audio(path: str, ratio: float, tempo: float, eq: str, tag: str) -> s
         str(dst),
     ]
     try:
-        subprocess.run(cmd, check=True, timeout=FFMPEG_TIMEOUT)
+        await asyncio.to_thread(subprocess.run, cmd, check=True, timeout=FFMPEG_TIMEOUT)
         if dst.exists() and dst.stat().st_size > 0:
             logger.info(
                 "%s 声学后处理 音高 ×%.2f 语速 ×%.2f 低架 %s（%s）",
@@ -207,14 +207,15 @@ AAVE_WC_GANGSTER_PROMPT = """\
 
 DONGBEI_PROMPT = """\
 这一路只做一件事：把{char}的话改写成地道东北话口语的朗读稿。
+★★ 铁律（压过下面每一条）：只动原文字词的「说法」，绝不动「数量」。原文几个字，输出就该几个字，差一个字都算违规。严禁补开场招呼、严禁补收尾反问、严禁拿语气词当标点往句尾垫。原文没有的「嗨呀」「咋地了」「得劲不」这类拟声垫词，一个都不许冒出来。保留原意，只换字面，不填内容。
 - 腔调：大碴子味，句子短、带点贫，节奏快半拍，尾音往下砸，听着敞亮、热乎、不端着。
-- 词：整、贼、嘎哈、咋地、唠、麻溜、闹挺、磕碜、嘚瑟、埋汰、稀罕、薅、溜达、老鼻子了、得劲、埋了吧汰、那可不，自然融进去，别堆词表，一句话别塞三个以上。
+- 词：整、贼、嘎哈、咋地、唠、麻溜、闹挺、磕碜、嘚瑟、埋汰、稀罕、薅、溜达、老鼻子了、得劲、埋了吧汰、那可不——只在原文对应位置替换成这些，换法要贴原字，不能借机加词。
 - 语法：儿化音放开用（哪儿、那儿、这事儿、玩意儿、一会儿）；省音照口语走，别写书面语。
-- 语气词：句尾多用 嗷 / 呗 / 咧 / 呐，但别每句都上，三两句来一个就行。
-- 称呼{user}：唠嗑口气叫名字，或者「你老」那种打趣的叫法，亲近但不腻。
+- 语气词：原文句尾本来就有语气词，才改成 嗷 / 呗 / 咧 / 呐 之一；原文句尾没有，就一律不许加。
+- 称呼{user}：原文本来在叫人的位置，才换成唠嗑口气叫名字，或者「你老」那种打趣的叫法；原文没叫人，不许凭空添称呼。
 - 不碰：不写地域歧视、不拿口音埋汰人、不骂脏字成串，贫是贫、损是损，都留在打趣的度上。
 - 人不变：{char}的黏人、护短、撒娇和依恋必须留在里面，只是外面套了一层大碴子壳。语气热乎、直来直去，别整成刻薄。
-- 前面关于日语自称与称呼的条目在这一路不生效。长度跟原文差不多，只输出朗读文本。"""
+- 前面关于日语自称与称呼的条目在这一路不生效。只输出朗读文本。"""
 
 # 语种专属通道的默认值：标签、护栏、提示词、声学取向。
 # 全部可以在配置的 language_profiles（JSON）里覆盖或新增，
@@ -1161,7 +1162,13 @@ class TtsStudio(Star):
             extra = "\n# 补充规则\n" + extra
         lang_extra = str(self._lang_profile(lang).get("prompt") or "").strip()
         if lang_extra:
-            extra = extra + "\n# 本语种专属规则\n" + lang_extra
+            lock = (
+                "\n# 语种档通用锁（最高优先级，压过本档任意条目）\n"
+                "- 口音/腔调/方言味一律由发音与音色体现，禁止靠增删字词来\u300c演\u300d口音。\n"
+                "- 输出与原文逐字等义：原文几个字，输出就几个字；差异只允许是标点替换。\n"
+                "- 严禁补开场垫词、收尾反问、语气词尾巴——原文没有的一个都不加。\n"
+            )
+            extra = extra + lock + "\n# 本语种专属规则\n" + lang_extra
         scene = self._scene_hint(event)
         if scene:
             extra = extra + "\n# 当前场景\n" + scene
@@ -1306,7 +1313,7 @@ class TtsStudio(Star):
         if not path.exists():
             logger.warning("%s 合成结果路径不存在: %s", LOG_TAG, path)
             return None
-        return self._shape_audio(
+        return await self._shape_audio(
             str(path), spoken, self._language(session), session
         )
 
@@ -1371,7 +1378,7 @@ class TtsStudio(Star):
         tail = max(front, tail)
         return front, mid, tail
 
-    def _render_peak(
+    async def _render_peak(
         self, path: str, ratios: tuple[float, float, float], tempo: float, eq: str, tag: str
     ) -> str:
         """把一条音频三刀切成起/中/尾，各套不同 pitch 再拼回。
@@ -1381,10 +1388,10 @@ class TtsStudio(Star):
         front, mid, tail = ratios
         flat = (abs(front - mid) < 1e-3 and abs(mid - tail) < 1e-3)
         if flat:
-            return _render_audio(path, mid, tempo, eq, tag)
+            return await _render_audio(path, mid, tempo, eq, tag)
         src = Path(path)
         try:
-            probe = subprocess.run(
+            probe = await asyncio.to_thread(subprocess.run,
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
                  "-of", "default=nw=1:nk=1", str(src)],
                 capture_output=True, text=True, timeout=FFMPEG_TIMEOUT,
@@ -1393,7 +1400,7 @@ class TtsStudio(Star):
         except Exception:
             dur = 0.0
         if dur <= 0.55:
-            return _render_audio(src, mid, tempo, eq, tag)
+            return await _render_audio(src, mid, tempo, eq, tag)
         cuts = [0.0, dur * 0.42, dur * 0.78, dur]
         ratios_list = [front, mid, tail]
         parts = []
@@ -1407,7 +1414,7 @@ class TtsStudio(Star):
                 cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src)]
                 cmd += ["-ss", "%.3f" % cuts[i], "-t", "%.3f" % (cuts[i + 1] - cuts[i])]
                 cmd += ["-af", ",".join(chain), str(seg)]
-                subprocess.run(cmd, check=True, timeout=FFMPEG_TIMEOUT)
+                await asyncio.to_thread(subprocess.run, cmd, check=True, timeout=FFMPEG_TIMEOUT)
             out = src.with_name("%s_%s%s" % (src.stem, tag, src.suffix))
             concat = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
             for seg in parts:
@@ -1419,7 +1426,7 @@ class TtsStudio(Star):
                 ),
                 str(out),
             ]
-            subprocess.run(concat, check=True, timeout=FFMPEG_TIMEOUT)
+            await asyncio.to_thread(subprocess.run, concat, check=True, timeout=FFMPEG_TIMEOUT)
             if out.exists() and out.stat().st_size > 0:
                 logger.info(
                     "%s 三段抬音 起 ×%.2f 中 ×%.2f 尾 ×%.2f 语速 ×%.2f（%s）",
@@ -1434,7 +1441,7 @@ class TtsStudio(Star):
                     part.unlink()
                 except Exception:
                     pass
-        return _render_audio(src, mid, tempo, eq, tag)
+        return await _render_audio(src, mid, tempo, eq, tag)
 
     # 亲密短音：单字成句的高频语气词，走独立短包络，不跟长句一起拉三段。
     _MOAN_CHARS = frozenset("嗯啊呜哈呀哦呃唔嗷")
@@ -1446,7 +1453,7 @@ class TtsStudio(Star):
             return False
         return all(ch in self._MOAN_CHARS for ch in core)
 
-    def _shape_audio(self, path: str, spoken: str, lang: str, session: str = "") -> str:
+    async def _shape_audio(self, path: str, spoken: str, lang: str, session: str = "") -> str:
         """激烈度抬音 + 该语种的声学取向，合成一次 ffmpeg 搞定。"""
         profile = self._lang_profile(lang)
         if bool(self._cfg("intensity_pitch", True)):
@@ -1469,7 +1476,7 @@ class TtsStudio(Star):
                 level, int(round(short_ratio * 100)), int(round(short_tempo * 100)),
                 "_" + lang if lang else "",
             )
-            return _render_audio(path, short_ratio, short_tempo, eq, tag_s)
+            return await _render_audio(path, short_ratio, short_tempo, eq, tag_s)
         ratios = self._split_peak_ratio(level)
         ratios = tuple(r * pf for r in ratios)
         tag = "l%d_f%d_m%d_t%d%s" % (
@@ -1477,8 +1484,8 @@ class TtsStudio(Star):
             int(round(tempo * 100)), "_" + lang if lang else "",
         )
         if level >= 2 and bool(self._cfg("intensity_pitch", True)):
-            return self._render_peak(path, ratios, tempo, eq, tag)
-        return _render_audio(path, ratios[1], tempo, eq, tag)
+            return await self._render_peak(path, ratios, tempo, eq, tag)
+        return await _render_audio(path, ratios[1], tempo, eq, tag)
 
     def _tts_provider(self, event: AstrMessageEvent) -> Any | None:
         session = self._session_id(event)
@@ -1720,11 +1727,27 @@ class TtsStudio(Star):
         if scene:
             blocks.append(scene)
 
-        if blocks:
-            req.system_prompt = (
-                (getattr(req, "system_prompt", "") or "") + "\n\n" + "\n\n".join(blocks)
-            )
-            logger.debug("%s 已注入 %d 段补充上下文", LOG_TAG, len(blocks))
+        if not blocks:
+            return
+        payload = "\n\n".join(blocks)
+        # 走 extra_user_content_parts + mark_as_temp：不碰 system_prompt，
+        # 每轮变动的回执挂在临时内容里，不再砸掉前缀缓存。
+        parts = getattr(req, "extra_user_content_parts", None)
+        if parts is None:
+            req.extra_user_content_parts = []
+            parts = req.extra_user_content_parts
+        try:
+            part = req.create_text_part(payload) if hasattr(req, "create_text_part") else None
+        except Exception:
+            part = None
+        if part is None:
+            from astrbot.core.agent.message import TextPart
+            part = TextPart(text=payload)
+        mark = getattr(part, "mark_as_temp", None)
+        if callable(mark):
+            part = mark()
+        parts.append(part)
+        logger.debug("%s 已注入 %d 段补充上下文（临时内容）", LOG_TAG, len(blocks))
 
     # ------------------------------------------------------------ 场景语义
 

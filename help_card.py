@@ -58,21 +58,11 @@ class HelpCardTheme:
 
     @property
     def font_path(self) -> Path:
-        p = self.resource_dir / self.font_name
-        if not p.exists():
-            fallback = Path(r"E:\AstrBot\data\plugins\astrbot_plugin_box\core\resource\OPPOSans-4.0.ttf")
-            if fallback.exists():
-                return fallback
-        return p
+        return self.resource_dir / self.font_name
 
     @property
     def emoji_font_path(self) -> Path:
-        p = self.resource_dir / self.emoji_font_name
-        if not p.exists():
-            fallback = Path(r"E:\AstrBot\data\plugins\astrbot_plugin_box\core\resource\NotoColorEmoji.ttf")
-            if fallback.exists():
-                return fallback
-        return p
+        return self.resource_dir / self.emoji_font_name
 
 
 class HelpCardMaker:
