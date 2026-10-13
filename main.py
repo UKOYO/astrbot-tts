@@ -673,6 +673,113 @@ class TtsStudio(Star):
                     aliases[alias] = code
         return aliases
 
+    # ------------------------------------------------------------ 自然语言切换
+
+    # 圈定「这是切换意图」的动词/句式；不在句式里的句子一律不切
+    _SWITCH_VERB_RE = re.compile(
+        r"(换成?|切换?到?|改成?|变为?|变声成?|用|来(?:一?)?(?:段|句|点)?|说|讲|读|念)"
+    )
+    # 目标词和动词之间允许夹的虚字，抠词时先剥掉
+    _SWITCH_NOISE = "个的了下吧呢呀嘛呗这那一种点儿句段声音腔调口气"
+
+    def _sniff_switch(self, text: str) -> tuple[str, str] | None:
+        """从一句人话里嗅出切换意图，命中返回 ("lang"|"voice", code/id)。
+
+        规则很保守：必须同时满足「有切换动词」+「目标词能在现成别名表/音色库里
+        对上」才认；任何一边拿不准都返回 None，宁可不切也不错切。
+        """
+        raw = (text or "").strip()
+        if not raw or len(raw) > 40:
+            return None
+        if not self._SWITCH_VERB_RE.search(raw):
+            return None
+
+        aliases = self._language_aliases()
+        labels = self._language_labels()
+
+        def _hit_lang(segment: str) -> str | None:
+            # 长别名优先，避免「日语」先于「标准日语」命中
+            for alias in sorted(aliases, key=len, reverse=True):
+                if alias and alias in segment:
+                    return aliases[alias]
+            for code, label in sorted(labels.items(), key=lambda kv: len(kv[1]), reverse=True):
+                if label and label in segment:
+                    return code
+            return None
+
+        def _hit_voice(segment: str) -> str | None:
+            try:
+                return self._resolve_voice_id(segment)
+            except Exception:
+                return None
+
+        # 逐字剥噪声后再匹配；只剥首尾噪声不碰中段词
+        cleaned = raw
+        for ch in self._SWITCH_NOISE:
+            cleaned = cleaned.replace(ch, " ")
+        # 分别取「动词之后」的那截当目标区，降低把闲聊词误当目标的概率
+        best: tuple[str, str] | None = None
+        for m in self._SWITCH_VERB_RE.finditer(cleaned):
+            segment = cleaned[m.end():].strip()
+            if not segment:
+                continue
+            lang = _hit_lang(segment)
+            if lang:
+                return ("lang", lang)
+            voice = _hit_voice(segment)
+            if voice:
+                return ("voice", voice)
+        return best
+
+    async def _apply_sniffed_switch(
+        self, event: AstrMessageEvent, text: str
+    ) -> str | None:
+        """把嗅探到的切换落到会话上，成功返回一条给用户看的回执，否则 None。"""
+        if not bool(self._cfg("nl_switch", True)):
+            return None
+        if not self._switch_scope_ok(event):
+            return None
+        snout = self._sniff_switch(text)
+        if not snout:
+            return None
+        session = self._session_id(event)
+        if not session:
+            return None
+        kind, value = snout
+        if kind == "lang":
+            labels = self._language_labels()
+            if self._language(session) == value:
+                return None
+            self._set_session_language(session, value)
+            return f"tts：本会话改说{labels.get(value, value)}了"
+        # voice
+        if self._session_voice(session) == value:
+            return None
+        self._set_session_voice(session, value)
+        return f"tts：本会话音色换成 {value} 了"
+
+    def _switch_scope_ok(self, event: AstrMessageEvent) -> bool:
+        """自然语言切换只在私聊里、且发起人是主人时才生效，群聊一律不放开。"""
+        scope = str(self._cfg("trigger_scope", "primary_private") or "primary_private")
+        if scope == "all":
+            return True
+        is_private = True
+        fn = getattr(event, "is_private_chat", None)
+        if callable(fn):
+            try:
+                is_private = bool(fn())
+            except Exception:
+                is_private = True
+        if not is_private:
+            return False
+        if scope == "private_only":
+            return True
+        try:
+            sender = str(event.get_sender_id())
+        except Exception:
+            sender = ""
+        return sender in self._primary_users()
+
     def _persona_fill(self, text: str) -> str:
         """把 {char} / {user} 换成配置里的叫法。
 
@@ -1591,6 +1698,15 @@ class TtsStudio(Star):
             return
 
         blocks: list[str] = []
+        # 自然语言切换：先嗅当轮用户原话，命中就落会话，再把回执塞给模型
+        try:
+            user_text = (event.message_str or "").strip()
+            receipt = await self._apply_sniffed_switch(event, user_text)
+            if receipt:
+                blocks.append("【语音设置】" + receipt + "（下一轮起生效，无需向用户复述）")
+        except Exception as exc:
+            logger.warning("%s 自然语言切换嗅探失败: %s", LOG_TAG, exc)
+
         if bool(self._cfg("voice_log_notice", True)):
             note = self._drain_voice_note(session)
             if note:

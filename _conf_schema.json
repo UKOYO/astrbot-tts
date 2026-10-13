@@ -33,6 +33,12 @@
     "default": "primary_private",
     "hint": "默认只给主用户本人的私聊合成语音。"
   },
+  "nl_switch": {
+    "type": "bool",
+    "description": "自然语言切换",
+    "default": true,
+    "hint": "开启后，主人在私聊里顺口说「换个东北话」「用XX音色说」这类话，命中语种别名或音色名就直接切本会话，不用打 tts 指令。只在私聊且发起人为主用户时生效，群聊不放开。"
+  },
   "primary_user_ids": {
     "type": "string",
     "description": "主用户 ID",
@@ -56,7 +62,8 @@
       "ru",
       "ar",
       "en",
-      "aave_wc"
+      "aave_wc",
+      "dongbei"
     ],
     "labels": [
       "标准日语（东京腔）",
@@ -72,7 +79,8 @@
       "俄语",
       "阿拉伯语",
       "英语",
-      "美国俚语黑人西海岸口音"
+      "美国俚语黑人西海岸口音",
+      "东北话"
     ],
     "default": "ja"
   },
