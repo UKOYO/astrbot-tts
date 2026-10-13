@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.bak
+*.bak-*
+*.bak2-*
+test_*.py
+
+resources/*.ttf
+resources/*.otf

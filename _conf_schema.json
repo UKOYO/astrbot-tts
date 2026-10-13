@@ -1,0 +1,293 @@
+{
+  "enable": {
+    "type": "bool",
+    "description": "总开关",
+    "default": true,
+    "hint": "关掉后本插件完全不介入消息发送。"
+  },
+  "provider_proxy": {
+    "type": "string",
+    "description": "供应商代理",
+    "default": "",
+    "hint": "留空表示不改动供应商自身配置。填 http://127.0.0.1:7890 这类地址则强制让本插件的合成请求走该代理。"
+  },
+  "extra_conversion_prompt": {
+    "type": "text",
+    "description": "TTS 转换补充规则",
+    "default": "# Role: TTS 配音台本重塑引擎\n\n## 核心任务\n将输入文本转换为符合自然语流与声学连贯性的口语台本。\n重点消除 TTS 引擎因标点泛滥导致的「逢逗号必重置音调、情绪断裂机械」问题，让说话人的语气与情绪形成一条完整的声学弧线，严禁改变核心原意。\n\n### 1. 首尾缓冲（防吞字与截断）\n- 首行开头必须以「……」或「，」作为起手垫音缓冲（垫出微弱空隙，防止首字吞头）。\n- 末行结尾必须以「……」或「。」作为收拢收尾（防止尾音爆破或早切）。\n\n### 2. 语气连贯与抗重置策略（核心）\n- 坚决抑制逗号泛滥：严禁为了断句而随意加逗号。只要语义在连贯表达、呼吸无需硬换气，就必须保持整句自然连读，绝对不打标点；严禁碎片化切碎意群，让声音模型顺着语意自然起伏，杜绝每个短语后音调归零重开。\n- 段落整体交付，严禁硬换行：同一段连续表达严禁回车分行，一律保持为单行完整段落，防止引擎将换行识别为切片硬停顿。\n- 标点降噪与特殊停顿：仅在整段语意真正完结时使用句号「。」；迟疑、拖腔或叹气使用省略号「……」；语意急刹、被打断或大幅转折使用破折号「——」。\n\n### 3. 人设与角色腔调贴合\n- 情绪贯通：精准捕捉角色当前的口吻（如傲娇、吐槽、冷峻、慵懒等），让该情绪在整段语流中自然流淌，避免中途垮掉或变调。\n- 文本净化：彻底剔除动作、心理、音效等括号说明。若括号内包含情绪词（如【轻笑】、【无奈】），将其转化为对应的语气连贯表达后删去原标注。\n\n### 4. 纯净交付\n- 仅输出重构后的台本正文。\n- 禁止输出任何 Markdown 标记、代码块、前言解释或附加说明。",
+    "hint": "留空 = 用内置的「台本重塑引擎」默认规则；想定制就写这里，会附在转换提示词末尾。"
+  },
+  "trigger_scope": {
+    "type": "string",
+    "description": "触发范围",
+    "options": [
+      "primary_private",
+      "private_only",
+      "all"
+    ],
+    "labels": [
+      "仅主用户的私聊",
+      "所有私聊",
+      "所有会话"
+    ],
+    "default": "primary_private",
+    "hint": "默认只给主用户本人的私聊合成语音。"
+  },
+  "primary_user_ids": {
+    "type": "string",
+    "description": "主用户 ID",
+    "default": "",
+    "hint": "填用户 ID，多个用逗号分隔，通常只填一个。留空则主人相关逻辑不启用。"
+  },
+  "voice_language": {
+    "type": "string",
+    "description": "语音语种",
+    "options": [
+      "ja",
+      "ja_kansai",
+      "zh",
+      "yue",
+      "ko",
+      "de",
+      "fr",
+      "es",
+      "it",
+      "pt",
+      "ru",
+      "ar",
+      "en",
+      "aave_wc"
+    ],
+    "labels": [
+      "标准日语（东京腔）",
+      "关西腔日语",
+      "中文",
+      "粤语",
+      "韩语",
+      "德语",
+      "法语",
+      "西班牙语",
+      "意大利语",
+      "葡萄牙语",
+      "俄语",
+      "阿拉伯语",
+      "英语",
+      "美国俚语黑人西海岸口音"
+    ],
+    "default": "ja"
+  },
+  "conversion_provider_id": {
+    "type": "string",
+    "description": "文本转换模型",
+    "default": "",
+    "hint": "把正文改写成朗读稿用的对话模型，留空则跟随当前会话的模型。"
+  },
+  "tts_provider_id": {
+    "type": "string",
+    "description": "TTS 供应商",
+    "default": "",
+    "hint": "留空则跟随当前会话配置的语音供应商。"
+  },
+  "send_mode": {
+    "type": "string",
+    "description": "语音发送方式",
+    "options": [
+      "followup",
+      "attach"
+    ],
+    "labels": [
+      "后台追发（文字不等语音）",
+      "随消息挂载"
+    ],
+    "default": "followup",
+    "hint": "后台追发：文字立刻发出，语音转写合成完再单独补一条，最快也最不卡。"
+  },
+  "only_llm_result": {
+    "type": "bool",
+    "description": "只朗读 LLM 的回复",
+    "hint": "开启后，插件指令的回复（/picadl 的提示、/picasearch 卡片附言等）不会被念成语音，只有人格对话本身会被朗读",
+    "default": true
+  },
+  "show_advanced": {
+    "type": "bool",
+    "description": "更多设置",
+    "default": false,
+    "hint": "展开语义、亲密、文本、其他四组进阶项。关上只是收起，配置照常生效。"
+  },
+  "advanced": {
+    "type": "object",
+    "description": "更多设置",
+    "invisible": false,
+    "condition": {
+      "show_advanced": true
+    },
+    "items": {
+      "semantic": {
+        "type": "object",
+        "description": "语义",
+        "invisible": false,
+        "items": {
+          "scene_semantic": {
+            "type": "bool",
+            "description": "场景语义",
+            "default": true,
+            "hint": "转写朗读稿前，先拿最近几轮对话判一次场景，把标签喂给转换模型，让念出来的语气贴合当下情境。"
+          },
+          "emotion_tag": {
+            "type": "bool",
+            "description": "情绪标签前缀",
+            "default": true,
+            "hint": "判定时顺带挑一个情绪（平静／轻快／低落／急躁／私语／兴奋六选一），转写完在朗读稿最前面挂成 (happy) 这种 Fish 前缀。跟嵌在句里的激烈度不是一回事，两者各管各的。"
+          },
+          "kana_guard": {
+            "type": "bool",
+            "description": "日语护栏",
+            "default": true,
+            "hint": "转写结果假名太少（说明还是中文原文）时跳过语音，避免声码器念中文破音。"
+          },
+          "persona_bot_name": {
+            "type": "string",
+            "description": "角色名（占位 {char}）",
+            "default": "",
+            "hint": "语种规则里的 {char} 会换成这个名字；留空则显示为「角色」。"
+          },
+          "persona_user_name": {
+            "type": "string",
+            "description": "对方称呼（占位 {user}）",
+            "default": "",
+            "hint": "语种规则里的 {user} 会换成这个名字；留空则显示为「对方」。"
+          }
+        }
+      },
+      "intimate": {
+        "type": "object",
+        "description": "亲密",
+        "invisible": false,
+        "items": {
+          "intimate_scene_semantic": {
+            "type": "bool",
+            "description": "白名单亲密语义",
+            "default": true,
+            "hint": "只有放行名单里的用户，判定提示词才会带上亲密段，别人拿不到。关掉＝整条亲密语义不启用。"
+          },
+          "intimate_scene_ids": {
+            "type": "string",
+            "description": "放行名单",
+            "default": "",
+            "hint": "填要放行的用户 ID，多个用逗号分隔。通常只填一个，留空则回落『主用户 ID』。"
+          },
+          "intensity_pitch": {
+            "type": "bool",
+            "description": "激烈度抬音",
+            "default": true,
+            "hint": "总开关。关掉＝整条抬音不走，下面的步长、判定源都不生效。"
+          },
+          "pitch_step": {
+            "type": "float",
+            "description": "每档抬音步长",
+            "default": 0.05,
+            "hint": "抬音开关开着时才有用。四档倍率＝1 + 档位 × 步长，默认 1.00／1.05／1.10／1.15。"
+          },
+          "intensity_source": {
+            "type": "string",
+            "description": "激烈度判定源",
+            "options": [
+              "both",
+              "semantic",
+              "keywords"
+            ],
+            "labels": [
+              "语义+词表（取高者）",
+              "只用场景语义",
+              "只用关键词表"
+            ],
+            "default": "both",
+            "hint": "抬音开关开着时才有用。『只用关键词表』＝退回旧行为，完全不看语义。"
+          },
+          "intensity_markers": {
+            "type": "text",
+            "description": "激烈度关键词",
+            "default": "",
+            "hint": "激烈度兜底词表，一行一个或用逗号分隔。留空＝不做词表判定，激烈度完全交给场景语义。"
+          }
+        }
+      },
+      "text": {
+        "type": "object",
+        "description": "文本",
+        "invisible": false,
+        "items": {
+          "skip_patterns": {
+            "type": "string",
+            "description": "跳过朗读的正则",
+            "hint": "每行一条正则，命中就不合成语音。留空不做文本过滤。例: ^📚 开始整本下载",
+            "default": ""
+          },
+          "strip_parenthetical": {
+            "type": "bool",
+            "description": "剔除括号舞台指示",
+            "default": true
+          },
+          "strip_emoji": {
+            "type": "bool",
+            "description": "剔除颜文字与 emoji",
+            "default": true,
+            "hint": "颜文字与表情符号最容易让声码器出破音。"
+          },
+          "skip_when_contains_media": {
+            "type": "bool",
+            "description": "含图片／语音时不重复合成",
+            "default": true
+          },
+          "keep_visible_text": {
+            "type": "bool",
+            "description": "保留文字一起发出",
+            "default": true,
+            "hint": "仅「随消息挂载」模式下生效；后台追发模式下文字总是先发。"
+          },
+          "min_chars": {
+            "type": "int",
+            "description": "最短合成字数",
+            "default": 1
+          },
+          "max_chars": {
+            "type": "int",
+            "description": "朗读稿最长字数",
+            "default": 400,
+            "hint": "超过的正文会被截断后再合成，越长越慢，建议 300~400。"
+          },
+          "hard_max_chars": {
+            "type": "int",
+            "description": "不合成门限",
+            "default": 800,
+            "hint": "正文长过这个数就整条不出语音，免得合成等太久。"
+          },
+          "min_interval_seconds": {
+            "type": "float",
+            "description": "同一会话最小间隔（秒）",
+            "default": 2.0
+          }
+        }
+      },
+      "misc": {
+        "type": "object",
+        "description": "其他",
+        "invisible": false,
+        "items": {
+          "language_profiles": {
+            "type": "text",
+            "description": "语种专属通道",
+            "default": "",
+            "hint": "JSON。想给某个语种加专属提示词／声学取向就写在这里，例如 {\"aave_wc\": {\"pitch\": 0.94, \"tempo\": 0.96, \"eq\": \"equalizer=f=180:t=h:width_type=o:width=1.2:g=4.5\", \"guard\": \"latin\", \"aliases\": [\"黑帮\"], \"prompt\": \"把{char}的话改写…\"}}。只写要覆盖的字段；guard 可选 kana／cjk／hangul／latin／cyrillic／arabic／none。"
+          },
+          "voice_log_notice": {
+            "type": "bool",
+            "description": "语音投递回执",
+            "default": true,
+            "hint": "语音补发后留一条短记录，下一轮注入系统提示词，让模型知道「自己刚才确实出过声」。注入一次即清，默认最多 3 条、15 分钟内有效。"
+          }
+        }
+      }
+    }
+  }
+}
